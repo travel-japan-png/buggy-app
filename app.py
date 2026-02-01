@@ -60,8 +60,8 @@ def calculate_details(df):
     s1 = (driver_count - passenger_count).clip(lower=0)
     
     # 表示用テキスト作成
-    df['使用車両'] = s2.apply(lambda x: f"【2人乗り】{int(x)}台 " if x > 0 else "") + \
-                     s1.apply(lambda x: f"【1人乗り】{int(x)}台" if x > 0 else "")
+    df['使用車両'] = s2.apply(lambda x: f"【2人】{int(x)}台 " if x > 0 else "") + \
+                     s1.apply(lambda x: f"【1人】{int(x)}台" if x > 0 else "")
     
     # 2人乗り/1人乗りの数値を保持（サマリー用）
     df['_s2'] = s2
@@ -82,7 +82,8 @@ stock_1s = st.sidebar.number_input("1人乗り在庫", value=3)
 
 df_raw = load_data()
 
-st.subheader("📋 予約入力・編集")
+st.subheader("📋 予約入力・編集 (全データ)")
+st.caption("ここで「ステータス」をキャンセルにすると、下のリストから消えます。")
 edited_df = st.data_editor(
     df_raw,
     num_rows="dynamic",
@@ -98,12 +99,15 @@ if st.button("💾 変更を保存して全員に共有"):
 # --- 5. 結果表示 ---
 if not edited_df.empty:
     res_df = calculate_details(edited_df)
-    active_df = res_df[res_df['ステータス'] != 'キャンセル']
+    
+    # ★ ここで「キャンセル」の人を除外したデータを作成
+    # 「キャンセル」という文字が含まれていない行だけを残す
+    active_df = res_df[res_df['ステータス'] != 'キャンセル'].copy()
 
     st.divider()
     
-    # --- サマリー表示 ---
-    st.subheader("📊 時間帯別の稼働合計")
+    # --- サマリー表示 (キャンセルを除いた合計) ---
+    st.subheader("📊 時間帯別の稼働合計 (確定分)")
     summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
     if not summary.empty:
         cols = st.columns(4)
@@ -112,14 +116,4 @@ if not edited_df.empty:
             s2, s1 = summary.loc[time, '_s2'], summary.loc[time, '_s1']
             with cols[i % 4]:
                 st.write(f"🕒 **{time}**")
-                st.metric("2人乗り", f"{int(s2)} / {stock_2s}", delta=int(stock_2s - s2))
-                st.metric("1人乗り", f"{int(s1)} / {stock_1s}", delta=int(stock_1s - s1))
-
-    # --- 現場用詳細リスト ---
-    st.subheader("🔍 現場用・車両割当リスト")
-    # 表示する列を絞り込む
-    display_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
-    
-    # 読みやすくスタイルを適用
-    st.table(res_df[display_cols]) # tableにするとスクロールせずに全表示されて見やすいです
-
+                st.metric("2人乗り", f"{int(s2)} / {stock_2s}",
