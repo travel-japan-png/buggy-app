@@ -5,7 +5,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 1. 合言葉チェック ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "tomamubuggy":
+        if st.session_state["password"] == "your-password-123":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
@@ -50,24 +50,20 @@ def calculate_details(df):
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
         df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
 
-    # 連立方程式
+    # 計算
     total_count = df['大人人数'] + df['小人人数']
     driver_count = ((df['総販売金額'] - (500 * total_count)) / 4000).apply(lambda x: int(x) if x > 0 else 0)
     passenger_count = (total_count - driver_count).apply(lambda x: int(x) if x > 0 else 0)
     
-    # 車両数計算
     s2 = passenger_count
     s1 = (driver_count - passenger_count).clip(lower=0)
     
-    # 表示用テキスト作成
     df['使用車両'] = s2.apply(lambda x: f"【2人】{int(x)}台 " if x > 0 else "") + \
                      s1.apply(lambda x: f"【1人】{int(x)}台" if x > 0 else "")
     
-    # 2人乗り/1人乗りの数値を保持（サマリー用）
     df['_s2'] = s2
     df['_s1'] = s1
     
-    # 判定
     df.insert(0, '状況', "✅")
     mask_error = (driver_count < passenger_count) & (total_count > 0)
     df.loc[mask_error, '状況'] = "⚠️ 運転手不足"
@@ -83,5 +79,21 @@ stock_1s = st.sidebar.number_input("1人乗り在庫", value=3)
 df_raw = load_data()
 
 st.subheader("📋 予約入力・編集 (全データ)")
-st.caption("ここで「ステータス」をキャンセルにすると、下のリスト
+st.caption("キャンセルに設定した予約は、下のリストには表示されません。")
+edited_df = st.data_editor(
+    df_raw,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editor"
+)
+
+if st.button("💾 変更を保存して全員に共有"):
+    conn.update(data=edited_df)
+    st.success("スプレッドシートに保存しました！")
+    st.rerun()
+
+# --- 5. 結果表示 ---
+if not edited_df.empty:
+    res_df = calculate_details(edited_df)
+    active_df
 
