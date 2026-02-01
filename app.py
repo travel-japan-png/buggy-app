@@ -83,37 +83,5 @@ stock_1s = st.sidebar.number_input("1人乗り在庫", value=3)
 df_raw = load_data()
 
 st.subheader("📋 予約入力・編集 (全データ)")
-st.caption("ここで「ステータス」をキャンセルにすると、下のリストから消えます。")
-edited_df = st.data_editor(
-    df_raw,
-    num_rows="dynamic",
-    use_container_width=True,
-    key="editor"
-)
+st.caption("ここで「ステータス」をキャンセルにすると、下のリスト
 
-if st.button("💾 変更を保存して全員に共有"):
-    conn.update(data=edited_df)
-    st.success("スプレッドシートに保存しました！")
-    st.rerun()
-
-# --- 5. 結果表示 ---
-if not edited_df.empty:
-    res_df = calculate_details(edited_df)
-    
-    # ★ ここで「キャンセル」の人を除外したデータを作成
-    # 「キャンセル」という文字が含まれていない行だけを残す
-    active_df = res_df[res_df['ステータス'] != 'キャンセル'].copy()
-
-    st.divider()
-    
-    # --- サマリー表示 (キャンセルを除いた合計) ---
-    st.subheader("📊 時間帯別の稼働合計 (確定分)")
-    summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
-    if not summary.empty:
-        cols = st.columns(4)
-        for i, time in enumerate(summary.index):
-            if str(time).strip() == "" or str(time) == "NaT": continue
-            s2, s1 = summary.loc[time, '_s2'], summary.loc[time, '_s1']
-            with cols[i % 4]:
-                st.write(f"🕒 **{time}**")
-                st.metric("2人乗り", f"{int(s2)} / {stock_2s}",
