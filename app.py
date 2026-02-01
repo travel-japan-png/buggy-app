@@ -1,14 +1,15 @@
 import streamlit as st
+import pandas as pd
+import io
 
-# --- 合言葉チェック ---
+# --- 1. 合言葉チェック (以前のものを継続) ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "your-password-123": # ←ここを好きなパスワードに変える
+        if st.session_state["password"] == "your-password-123":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
         st.text_input("パスワードを入力してください", type="password", on_change=password_entered, key="password")
         return False
@@ -21,79 +22,95 @@ def check_password():
 
 if not check_password():
     st.stop()
-# --- ここまで書き足す ---
 
-import streamlit as st
-import pandas as pd
-
-# --- 1. 基本設定 ---
+# --- 2. 基本設定 ---
 st.set_page_config(page_title="バギーツアー管理くん", layout="wide")
 st.title("🚜 バギーツアー車両管理・編集ツール")
 
-# --- 2. サイドバー：在庫管理 ---
+# サイドバー：在庫管理
 st.sidebar.header("本日の車両在庫")
 stock_2s = st.sidebar.number_input("2人乗り在庫 (台)", value=3, min_value=0)
 stock_1s = st.sidebar.number_input("1人乗り在庫 (台)", value=3, min_value=0)
 
-# --- 3. ロジック関数（計算・並べ替え） ---
+# --- 3. 計算・並べ替え関数 ---
 def calculate_details(df):
-    """表全体のデータに対して計算と並べ替えを行う"""
-    # データのコピーを作成
     df = df.copy()
-    
-    # 列が存在しない場合の補完
+    # 必要な列が欠けていれば作成
     required_cols = ['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス']
     for col in required_cols:
         if col not in df.columns:
             df[col] = ""
 
-    # 数値変換（エラー回避）
+    # 数値型へ変換（文字が混じっていても0にする）
     df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0)
     df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0)
     df['総販売金額'] = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
     
-    # 自動並べ替え（開始時間を基準に早い順）
+    # 開始時間で並べ替え
     if '開始時間' in df.columns:
-        # 入力された時間を一時的に時間型に変換してソート、空行は一番下へ
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
         df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
 
-    # 連立方程式で運転手(x)と同乗者(y)を算出
-    # 4500x + 500y = Amount / x + y = Count
+    # 連立方程式
     total_count = df['大人人数'] + df['小人人数']
-    # 0除算や計算ミスを防ぎつつ整数化
     df['運転手'] = ((df['総販売金額'] - (500 * total_count)) / 4000).apply(lambda x: int(x) if x > 0 else 0)
     df['同乗者'] = (total_count - df['運転手']).apply(lambda x: int(x) if x > 0 else 0)
     
-    # 車両割当ロジック
     df['2人乗り割当'] = df['同乗者']
     df['1人乗り割当'] = (df['運転手'] - df['同乗者']).clip(lower=0)
     
-    # 判定メッセージ
     df['判定'] = "✅ OK"
-    # 運転手 < 同乗者 の場合はエラー（ただし人数が入力されている場合のみ）
     mask_error = (df['運転手'] < df['同乗者']) & (total_count > 0)
     df.loc[mask_error, '判定'] = "⚠️ 運転手不足！"
-    # 金額未入力のチェック
-    mask_no_price = (total_count > 0) & (df['総販売金額'] == 0)
-    df.loc[mask_no_price, '判定'] = "❓ 金額未入力"
-    # そもそも人数が0の行
+    df.loc[(total_count > 0) & (df['総販売金額'] == 0), '判定'] = "❓ 金額未入力"
     df.loc[total_count == 0, '判定'] = "-"
     
     return df
 
-# --- 4. メイン画面：データの読み込みと編集 ---
-uploaded_file = st.file_uploader("Trunk ToolsのCSVをアップロード（または空の表から開始）", type="csv")
+# --- 4. メイン処理：CSV読み込み ---
+uploaded_file = st.file_uploader("Trunk ToolsのCSVをアップロード", type="csv")
 
-# データの土台を作成
-if uploaded_file:
+# データのベースを作成
+if uploaded_file is not None:
+    # 読み込みエラーを防ぐため複数のエンコーディングを試す
+    bytes_data = uploaded_file.getvalue()
     try:
-        base_df = pd.read_csv(uploaded_file, encoding='cp932')
+        raw_df = pd.read_csv(io.BytesIO(bytes_data), encoding='cp932')
     except:
-        base_df = pd.read_csv(uploaded_file, encoding='utf-8')
+        raw_df = pd.read_csv(io.BytesIO(bytes_data), encoding='utf-8-sig') # BOM付きUTF-8対応
+    
+    # 読み込んだデータの列名を整理（余計なスペースなどを消す）
+    raw_df.columns = raw_df.columns.str.strip()
+    base_df = raw_df
 else:
-    # ファイルがない場合は空のひな形を作成
     base_df = pd.DataFrame(columns=['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス'])
 
-# 編集・追加ができるデータエディタを表示
+# --- 5. 編集エディタ ---
 st.subheader("📋 予約リストの編集・追加")
+edited_df = st.data_editor(
+    base_df[['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス']],
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editor"
+)
+
+# --- 6. 結果の表示 ---
+if not edited_df.empty:
+    res_df = calculate_details(edited_df)
+    active_df = res_df[res_df['ステータス'] != 'キャンセル']
+
+    st.divider()
+    st.subheader("📊 時間帯別の稼働状況")
+    summary = active_df.groupby("開始時間").agg({"2人乗り割当": "sum", "1人乗り割当": "sum"})
+    
+    if not summary.empty:
+        cols = st.columns(3)
+        for i, time in enumerate(summary.index):
+            s2, s1 = summary.loc[time, '2人乗り割当'], summary.loc[time, '1人乗り割当']
+            with cols[i % 3]:
+                st.write(f"### 🕒 {time}")
+                st.metric("2人乗り", f"{int(s2)} / {stock_2s}", delta=int(stock_2s - s2))
+                st.metric("1人乗り", f"{int(s1)} / {stock_1s}", delta=int(stock_1s - s1))
+    
+    st.subheader("🔍 割り当て詳細")
+    st.dataframe(res_df.style.apply(lambda row: ['background-color: #ffcccc' if "⚠️" in str(row['判定']) else '' for _ in row], axis=1), use_container_width=True)
