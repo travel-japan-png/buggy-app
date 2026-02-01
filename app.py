@@ -50,7 +50,7 @@ def calculate_details(df):
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
         df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
 
-    # 計算
+    # 計算（連立方程式：大人1, 小人0.5のロジック）
     total_count = df['大人人数'] + df['小人人数']
     driver_count = ((df['総販売金額'] - (500 * total_count)) / 4000).apply(lambda x: int(x) if x > 0 else 0)
     passenger_count = (total_count - driver_count).apply(lambda x: int(x) if x > 0 else 0)
@@ -95,5 +95,31 @@ if st.button("💾 変更を保存して全員に共有"):
 # --- 5. 結果表示 ---
 if not edited_df.empty:
     res_df = calculate_details(edited_df)
-    active_df
+    
+    # キャンセルを除外したリストを作成
+    active_df = res_df[res_df['ステータス'] != 'キャンセル'].copy()
 
+    st.divider()
+    
+    # サマリー表示
+    st.subheader("📊 時間帯別の稼働合計 (確定分)")
+    summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
+    
+    if not summary.empty:
+        cols = st.columns(4)
+        for i, time in enumerate(summary.index):
+            if str(time).strip() == "" or str(time) == "NaT": continue
+            s2, s1 = summary.loc[time, '_s2'], summary.loc[time, '_s1']
+            with cols[i % 4]:
+                st.write(f"🕒 **{time}**")
+                st.metric("2人乗り", f"{int(s2)} / {stock_2s}", delta=int(stock_2s - s2))
+                st.metric("1人乗り", f"{int(s1)} / {stock_1s}", delta=int(stock_1s - s1))
+
+    # 現場用詳細リスト
+    st.subheader("🔍 現場用・当日車両割当リスト")
+    display_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
+    
+    if not active_df.empty:
+        st.table(active_df[display_cols])
+    else:
+        st.info("現在、有効な予約（キャンセル以外）はありません。")
