@@ -33,6 +33,15 @@ if not check_password():
 st.set_page_config(page_title="バギーツアー管理", layout="wide")
 st_autorefresh(interval=180000, key="datarefresh") # 3分更新
 
+# --- サイドバー：車両在庫の設定 ---
+st.sidebar.header("⚙️ 本日の車両在庫設定")
+st.sidebar.write("その日の稼働可能台数を入力してください")
+stock_2s = st.sidebar.number_input("2人乗り在庫 (台)", min_value=0, value=3, step=1)
+stock_1s = st.sidebar.number_input("1人乗り在庫 (台)", min_value=0, value=3, step=1)
+st.sidebar.divider()
+st.sidebar.caption("※ここで設定した台数を超えると、サマリー欄が赤く表示されます（delta機能）")
+
+# メインタイトルと更新ボタン
 col_t1, col_t2 = st.columns([3, 1])
 with col_t1:
     st.title("🚜 車両割当 & 受付管理")
@@ -47,30 +56,27 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     df = conn.read(ttl=0)
-    # 列の存在確認と初期化
     if 'チェックイン' not in df.columns:
         df['チェックイン'] = False
     df['チェックイン'] = df['チェックイン'].fillna(False).astype(bool)
     
-    # 【重要】「チェックイン」列を一番左に持ってくる並べ替え
+    # 「チェックイン」列を左端に
     cols = ['チェックイン'] + [c for c in df.columns if c != 'チェックイン']
     df = df[cols]
     return df
 
 def calculate_details(df):
     df = df.copy()
-    # 必須列の確認
     for col in ['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス']:
         if col not in df.columns: df[col] = ""
 
-    # 数値変換とソート
     df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0).astype(int)
     df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0).astype(int)
+    
     if '開始時間' in df.columns:
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
         df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
     
-    # 車両計算
     total = df['大人人数'] + df['小人人数']
     revenue = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
     drivers = ((revenue - (500 * total)) / 4000).apply(lambda x: int(x) if x > 0 else 0)
@@ -82,7 +88,6 @@ def calculate_details(df):
     df['_s2'] = passengers
     df['_s1'] = (drivers - passengers).clip(lower=0)
     
-    # 状況列の作成
     df.insert(0, '状況', "未受付")
     df.loc[df['チェックイン'] == True, '状況'] = "✅受付済"
     df.loc[(drivers < passengers) & (total > 0), '状況'] = "⚠️不足"
@@ -93,14 +98,13 @@ def calculate_details(df):
 df_raw = load_data()
 
 st.subheader("📋 予約入力・受付編集")
-# エディタの列設定
 edited_df = st.data_editor(
     df_raw,
     num_rows="dynamic",
     use_container_width=True,
     column_config={
         "チェックイン": st.column_config.CheckboxColumn(
-            "チェックイン", # ラベル名を変更
+            "チェックイン",
             width="small",
             default=False
         )
@@ -122,13 +126,17 @@ if not edited_df.empty:
     st.divider()
     st.subheader("📊 時間帯別の稼働合計")
     summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
+    
     if not summary.empty:
         cols = st.columns(4)
         for i, time in enumerate(summary.index):
             if str(time).strip() in ["", "NaT"]: continue
             s2, s1 = summary.loc[time, '_s2'], summary.loc[time, '_s1']
             with cols[i % 4]:
-                st.metric(f"🕒 {time}", f"2人:{int(s2)} / 1人:{int(s1)}")
+                st.write(f"🕒 **{time}**")
+                # 在庫に対する不足分を赤色で表示するdelta機能付き
+                st.metric("2人乗り", f"{int(s2)} / {stock_2s}", delta=int(stock_2s - s2), delta_color="normal")
+                st.metric("1人乗り", f"{int(s1)} / {stock_1s}", delta=int(stock_1s - s1), delta_color="normal")
 
     st.subheader("🔍 現場用・当日車両割当リスト")
     display_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
@@ -142,4 +150,3 @@ if not edited_df.empty:
             use_container_width=True,
             hide_index=True
         )
-
