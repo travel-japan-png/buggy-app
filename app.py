@@ -9,7 +9,7 @@ def check_password():
         return True
 
     def password_entered():
-        if st.session_state["password_input"] == "your-password-123":
+        if st.session_state["password_input"] == "tomamubuggy":
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
         else:
@@ -150,3 +150,4 @@ if not edited_df.empty:
             use_container_width=True,
             hide_index=True
         )
+
