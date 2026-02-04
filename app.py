@@ -34,12 +34,12 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- 3. データの読み込み ---
 def load_all_data():
-    # 予約データの読み込み
-    # worksheetを指定せず読み込むと、自動的に一番左のシートが選ばれます
+    # 予約データの読み込み（一番左のシート）
     try:
+        # ttl=0 を指定してキャッシュを無効化
         df = conn.read(ttl=0)
     except Exception as e:
-        st.error(f"データの読み込みに失敗しました。スプレッドシートが空ではないか確認してください。")
+        st.error("データの読み込みに失敗しました。スプレッドシートの中身を確認してください。")
         st.stop()
 
     if 'チェックイン' not in df.columns:
@@ -51,16 +51,36 @@ def load_all_data():
     df = df[cols]
 
     # 在庫データの読み込み（「在庫設定」シート）
-    s2_stock, s1_stock = 3, 3 # デフォルト値
+    s2_stock, s1_stock = 3, 3 # 読み込めない時のデフォルト値
     try:
-        # worksheet="在庫設定" という名前のシートを探す
+        # worksheet名を指定し、ここも ttl=0 で読み込む
         stock_df = conn.read(worksheet="在庫設定", ttl=0)
         if not stock_df.empty:
+            # .get()を使うことで、列名が少し違ってもエラーで止まらないようにします
             s2_stock = int(stock_df.iloc[0]['2人乗り'])
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
-    except:
-        # シートが見つからない、またはエラーの場合はデフォルト値（3台）で続行
-        pass
+    except Exception as e:
+        # 読み込めない場合はサイドバーにこっそりヒントを出す
+        st.sidebar.warning("「在庫設定」シートから台数を読み込めませんでした。デフォルトの3台で表示します。")
+        
+    return df, s2_stock, s1_stock
+    
+    # チェックイン列を左端へ
+    cols = ['チェックイン'] + [c for c in df.columns if c != 'チェックイン']
+    df = df[cols]
+
+    # 在庫データの読み込み（「在庫設定」シート）
+    s2_stock, s1_stock = 3, 3 # 読み込めない時のデフォルト値
+    try:
+        # worksheet名を指定し、ここも ttl=0 で読み込む
+        stock_df = conn.read(worksheet="在庫設定", ttl=0)
+        if not stock_df.empty:
+            # .get()を使うことで、列名が少し違ってもエラーで止まらないようにします
+            s2_stock = int(stock_df.iloc[0]['2人乗り'])
+            s1_stock = int(stock_df.iloc[0]['1人乗り'])
+    except Exception as e:
+        # 読み込めない場合はサイドバーにこっそりヒントを出す
+        st.sidebar.warning("「在庫設定」シートから台数を読み込めませんでした。デフォルトの3台で表示します。")
         
     return df, s2_stock, s1_stock
 
@@ -145,5 +165,6 @@ if not edited_df.empty:
         def highlight_rows(row):
             return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
         st.dataframe(active_df[display_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+
 
 
