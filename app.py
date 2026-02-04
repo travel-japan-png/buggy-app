@@ -9,7 +9,7 @@ def check_password():
         return True
 
     def password_entered():
-        if st.session_state["password_input"] == "your-password-123": # 必要に応じて変更
+        if st.session_state["password_input"] == "your-password-123":
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
         else:
@@ -23,7 +23,6 @@ def check_password():
         return False
     return True
 
-# セッションの初期化
 if "password_correct" not in st.session_state:
     st.session_state["password_correct"] = False
 
@@ -50,20 +49,20 @@ def load_all_data():
         df['チェックイン'] = False
     df['チェックイン'] = df['チェックイン'].fillna(False).astype(bool)
     
-    # チェックイン列を左端へ
+    # チェックイン列を左端へ移動
     cols = ['チェックイン'] + [c for c in df.columns if c != 'チェックイン']
     df = df[cols]
 
     # 在庫データの読み込み (「在庫設定」シート)
-    s2_stock, s1_stock = 3, 3 # デフォルト値
+    s2_stock, s1_stock = 3, 3 
     try:
         stock_df = conn.read(worksheet="在庫設定", ttl=0)
         if not stock_df.empty:
-            # 列名が完全一致している必要があります
             s2_stock = int(stock_df.iloc[0]['2人乗り'])
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
-    except Exception as e:
-        st.sidebar.warning("「在庫設定」シートから台数を読み込めませんでした。デフォルト(3台)で表示します。")
+    except:
+        # 読み込めない場合はサイドバーに警告を出す
+        st.sidebar.warning("「在庫設定」シートが読み込めないため、初期値(3台)で表示します。")
         
     return df, s2_stock, s1_stock
 
@@ -77,9 +76,10 @@ with col_t1:
 with col_t2:
     st.write("") 
     if st.button("🔄 最新の情報に更新", use_container_width=True):
-        st.cache_data.clear() # キャッシュを完全に消去
+        st.cache_data.clear()
         st.rerun()
 
 # サイドバー表示
 st.sidebar.header("⚙️ 車両在庫 (同期中)")
-st.sidebar.metric("2人
+st.sidebar.metric("2人乗り在庫", f"{stock_2s} 台")
+st.sidebar.metric("1人乗り在庫",
