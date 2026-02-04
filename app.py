@@ -8,7 +8,7 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
     def password_entered():
-        if st.session_state["password_input"] == "tomamubuggy":
+        if st.session_state["password_input"] == "your-password-123":
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
         else:
@@ -34,22 +34,33 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- 3. データの読み込み ---
 def load_all_data():
-    # 予約データの読み込み（Sheet1）
-    df = conn.read(worksheet="Sheet1", ttl=0) # シート名は実態に合わせて変更してください
+    # 予約データの読み込み
+    # worksheetを指定せず読み込むと、自動的に一番左のシートが選ばれます
+    try:
+        df = conn.read(ttl=0)
+    except Exception as e:
+        st.error(f"データの読み込みに失敗しました。スプレッドシートが空ではないか確認してください。")
+        st.stop()
+
     if 'チェックイン' not in df.columns:
         df['チェックイン'] = False
     df['チェックイン'] = df['チェックイン'].fillna(False).astype(bool)
+    
+    # チェックイン列を左端へ
     cols = ['チェックイン'] + [c for c in df.columns if c != 'チェックイン']
     df = df[cols]
 
     # 在庫データの読み込み（「在庫設定」シート）
+    s2_stock, s1_stock = 3, 3 # デフォルト値
     try:
+        # worksheet="在庫設定" という名前のシートを探す
         stock_df = conn.read(worksheet="在庫設定", ttl=0)
-        s2_stock = int(stock_df.iloc[0]['2人乗り'])
-        s1_stock = int(stock_df.iloc[0]['1人乗り'])
+        if not stock_df.empty:
+            s2_stock = int(stock_df.iloc[0]['2人乗り'])
+            s1_stock = int(stock_df.iloc[0]['1人乗り'])
     except:
-        # シートがない場合のデフォルト値
-        s2_stock, s1_stock = 3, 3
+        # シートが見つからない、またはエラーの場合はデフォルト値（3台）で続行
+        pass
         
     return df, s2_stock, s1_stock
 
@@ -65,11 +76,11 @@ with col_t2:
         st.cache_data.clear()
         st.rerun()
 
-# サイドバーは「現在の在庫表示」のみにする（変更はスプレッドシートで行う）
-st.sidebar.header("⚙️ 現在の車両在庫（同期中）")
+# サイドバー表示
+st.sidebar.header("⚙️ 車両在庫（同期中）")
 st.sidebar.metric("2人乗り在庫", f"{stock_2s} 台")
 st.sidebar.metric("1人乗り在庫", f"{stock_1s} 台")
-st.sidebar.info("在庫台数を変更したい場合は、スプレッドシートの「在庫設定」シートを書き換えて保存してください。")
+st.sidebar.info("在庫を変更するには、スプレッドシートの「在庫設定」シートを編集して保存してください。")
 
 # --- 5. 計算ロジック ---
 def calculate_details(df):
@@ -104,7 +115,8 @@ edited_df = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True,
                            key="editor")
 
 if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
-    conn.update(worksheet="Sheet1", data=edited_df)
+    # 保存時も特定のシート名を指定せず、最初のシートに保存するようにします
+    conn.update(data=edited_df)
     st.cache_data.clear()
     st.success("保存完了！")
     st.rerun()
@@ -133,4 +145,5 @@ if not edited_df.empty:
         def highlight_rows(row):
             return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
         st.dataframe(active_df[display_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+
 
