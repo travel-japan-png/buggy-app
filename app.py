@@ -62,4 +62,95 @@ def load_all_data():
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
     except:
         # 読み込めない場合はサイドバーに警告を出す
-        st
+        st.sidebar.warning("「在庫設定」シートが読み込めないため、初期値(3台)で表示します。")
+        
+    return df, s2_stock, s1_stock
+
+# データの取得
+df_raw, stock_2s, stock_1s = load_all_data()
+
+# --- 4. メイン画面表示 ---
+col_t1, col_t2 = st.columns([3, 1])
+with col_t1:
+    st.title("🚜 車両割当 & 受付管理")
+with col_t2:
+    st.write("") 
+    if st.button("🔄 最新の情報に更新", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+# サイドバー表示
+st.sidebar.header("⚙️ 車両在庫 (同期中)")
+st.sidebar.metric("2人乗り在庫", f"{stock_2s} 台")
+st.sidebar.metric("1人乗り在庫", f"{stock_1s} 台")
+st.sidebar.info("在庫を変更するには、スプレッドシートの「在庫設定」シートを編集してください。")
+
+# --- 5. 計算ロジック ---
+def calculate_details(df):
+    df = df.copy()
+    for col in ['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス']:
+        if col not in df.columns: df[col] = ""
+    
+    df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0).astype(int)
+    df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0).astype(int)
+    
+    if '開始時間' in df.columns:
+        df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
+        df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
+    
+    total = df['大人人数'] + df['小人人数']
+    revenue = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
+    drivers = ((revenue - (500 * total)) / 4000).apply(lambda x: int(x) if x > 0 else 0)
+    passengers = (total - drivers).apply(lambda x: int(x) if x > 0 else 0)
+    
+    df['使用車両'] = passengers.apply(lambda x: f"【2人】{int(x)}台 " if x > 0 else "") + \
+                     (drivers - passengers).clip(lower=0).apply(lambda x: f"【1人】{int(x)}台" if x > 0 else "")
+    df['_s2'] = passengers
+    df['_s1'] = (drivers - passengers).clip(lower=0)
+    
+    df.insert(0, '状況', "未受付")
+    df.loc[df['チェックイン'] == True, '状況'] = "✅受付済"
+    df.loc[(drivers < passengers) & (total > 0), '状況'] = "⚠️不足"
+    return df
+
+st.subheader("📋 予約入力・受付編集")
+edited_df = st.data_editor(
+    df_raw, 
+    num_rows="dynamic", 
+    use_container_width=True,
+    column_config={"チェックイン": st.column_config.CheckboxColumn("チェックイン", width="small")},
+    key="editor"
+)
+
+if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
+    conn.update(data=edited_df)
+    st.cache_data.clear()
+    st.success("保存完了！")
+    st.rerun()
+
+# --- 6. 結果表示 ---
+if not edited_df.empty:
+    res_df = calculate_details(edited_df)
+    active_df = res_df[res_df['ステータス'] != 'キャンセル'].copy()
+    st.divider()
+    st.subheader("📊 時間帯別の稼働合計 (確定分)")
+    summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
+    
+    if not summary.empty:
+        cols = st.columns(4)
+        for i, time in enumerate(summary.index):
+            if str(time).strip() in ["", "NaT"]: continue
+            s2, s1 = summary.loc[time, '_s2'], summary.loc[time, '_s1']
+            with cols[i % 4]:
+                st.write(f"🕒 **{time}**")
+                # 正しくカッコを閉じた修正版
+                st.metric("2人乗り", f"{int(s2)} / {stock_2s}", delta=int(stock_2s - s2))
+                st.metric("1人乗り", f"{int(s1)} / {stock_1s}", delta=int(stock_1s - s1))
+
+    st.subheader("🔍 現場用・当日車両割当リスト")
+    display_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
+    if not active_df.empty:
+        def highlight_rows(row):
+            return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
+        st.dataframe(active_df[display_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+
