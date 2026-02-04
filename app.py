@@ -62,24 +62,4 @@ def load_all_data():
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
     except:
         # 読み込めない場合はサイドバーに警告を出す
-        st.sidebar.warning("「在庫設定」シートが読み込めないため、初期値(3台)で表示します。")
-        
-    return df, s2_stock, s1_stock
-
-# データの取得
-df_raw, stock_2s, stock_1s = load_all_data()
-
-# --- 4. メイン画面表示 ---
-col_t1, col_t2 = st.columns([3, 1])
-with col_t1:
-    st.title("🚜 車両割当 & 受付管理")
-with col_t2:
-    st.write("") 
-    if st.button("🔄 最新の情報に更新", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-# サイドバー表示
-st.sidebar.header("⚙️ 車両在庫 (同期中)")
-st.sidebar.metric("2人乗り在庫", f"{stock_2s} 台")
-st.sidebar.metric("1人乗り在庫",
+        st
