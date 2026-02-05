@@ -8,7 +8,7 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
     def password_entered():
-        if st.session_state["password_input"] == "tomamubuggy":
+        if st.session_state["password_input"] == "your-password-123":
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
         else:
@@ -71,32 +71,23 @@ st.sidebar.metric("1人乗り在庫", f"{stock_1s} 台")
 # --- 4. 計算ロジック ---
 def calculate_details(df):
     df = df.copy()
-    # 必須列の確保
     for col in ['開始時間', '顧客', '大人人数', '小人人数', '総販売金額', 'ステータス']:
         if col not in df.columns: df[col] = ""
     
     df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0).astype(int)
     df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0).astype(int)
     
-    # 時間順ソート
     if '開始時間' in df.columns:
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
         df = df.sort_values(by='temp_time', na_position='last').drop(columns=['temp_time'])
     
-    # 【車両判定ロジック】
-    # 総額 = (運転手台数 * 4500) + (同乗者数 * 500)  ※保険料込み単価から逆算
-    # ここから、必ず2人乗りが必要な数(s2)と、1人乗りで済む数(s1)を導出
     total_ppl = df['大人人数'] + df['小人人数']
     revenue = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
-    
-    # 運転が必要な台数 (x)
-    # 4000x + 500 * (大人+小人) = 総額  => x = (総額 - 500*(大人+小人)) / 4000
     drivers = ((revenue - (500 * total_ppl)) / 4000).apply(lambda x: int(round(x)) if x > 0 else 0)
     passengers = (total_ppl - drivers).apply(lambda x: int(x) if x > 0 else 0)
     
-    # 基本の必要台数
-    df['_s2'] = passengers # 同乗者がいる＝必ず2人乗り
-    df['_s1'] = (drivers - passengers).clip(lower=0) # 運転手のみ＝1人乗り(または余った2人乗り)
+    df['_s2'] = passengers
+    df['_s1'] = (drivers - passengers).clip(lower=0)
     
     df['使用車両'] = df.apply(lambda row: 
         (f"【2人】{int(row['_s2'])}台 " if row['_s2'] > 0 else "") + 
@@ -117,37 +108,47 @@ if st.button("💾 変更を保存して全員に共有", type="primary", use_co
     st.success("保存完了！")
     st.rerun()
 
-# --- 5. 結果表示 & 振替適用 ---
+# --- 5. 結果表示 & 固定時間枠の適用 ---
 if not edited_df.empty:
     res_df = calculate_details(edited_df)
     active_df = res_df[res_df['ステータス'] != 'キャンセル'].copy()
     
     st.divider()
-    st.subheader("📊 時間帯別の稼働合計 (1人乗り不足は2人乗りへ振替)")
+    st.subheader("📊 時間帯別の稼働合計")
+
+    # 表示したい時間を定義
+    target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
     
+    # 予約データから集計
     summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
     
-    if not summary.empty:
-        cols = st.columns(4)
-        for i, time in enumerate(summary.index):
-            if str(time).strip() in ["", "NaT"]: continue
-            
-            s2_req = int(summary.loc[time, '_s2'])
-            s1_req = int(summary.loc[time, '_s1'])
-            
-            # 【振替ロジック】 1人乗りが足りない分を2人乗りに加算
-            s1_overflow = max(0, s1_req - stock_1s)
-            final_s1 = s1_req - s1_overflow
-            final_s2 = s2_req + s1_overflow
-            
-            with cols[i % 4]:
-                st.write(f"🕒 **{time}**")
-                # 2人乗り在庫チェック
-                s2_color = "normal" if final_s2 <= stock_2s else "inverse"
-                st.metric("2人乗り使用", f"{final_s2} / {stock_2s}", delta=int(stock_2s - final_s2), delta_color=s2_color)
-                st.metric("1人乗り使用", f"{final_s1} / {stock_1s}", delta=int(stock_1s - final_s1))
-                if s1_overflow > 0:
-                    st.caption(f"💡 1人乗り不足分 {s1_overflow}台を2人乗りで対応")
+    # 定義した時間をベースに表示（予約がない時間は0で埋める）
+    cols = st.columns(len(target_times))
+    for i, time in enumerate(target_times):
+        # 予約データ内の表記と一致させるための処理
+        s2_req = 0
+        s1_req = 0
+        
+        # summary.index（開始時間）の中に該当する時間があるか探す
+        # (スプレッドシートの表記ゆれに対応するため文字列で比較)
+        for idx in summary.index:
+            if str(idx) == time:
+                s2_req = int(summary.loc[idx, '_s2'])
+                s1_req = int(summary.loc[idx, '_s1'])
+                break
+        
+        # 振替ロジック適用
+        s1_overflow = max(0, s1_req - stock_1s)
+        final_s1 = s1_req - s1_overflow
+        final_s2 = s2_req + s1_overflow
+        
+        with cols[i]:
+            st.write(f"🕒 **{time}**")
+            s2_color = "normal" if final_s2 <= stock_2s else "inverse"
+            st.metric("2人乗り", f"{final_s2} / {stock_2s}", delta=int(stock_2s - final_s2), delta_color=s2_color)
+            st.metric("1人乗り", f"{final_s1} / {stock_1s}", delta=int(stock_1s - final_s1))
+            if s1_overflow > 0:
+                st.caption(f"💡 振替+{s1_overflow}")
 
     st.subheader("🔍 現場用・当日車両割当リスト")
     display_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
@@ -155,6 +156,5 @@ if not edited_df.empty:
         def highlight_rows(row):
             return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
         st.dataframe(active_df[display_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
-
 
 
