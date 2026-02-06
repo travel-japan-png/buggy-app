@@ -144,7 +144,4 @@ if not active_df.empty:
         use_container_width=True,
         hide_index=True
     )
-        hide_index=True
-    )
-
 
