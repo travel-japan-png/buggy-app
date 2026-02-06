@@ -8,7 +8,7 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
     def password_entered():
-        if st.session_state["password_input"] == "your-password-123":
+        if st.session_state["password_input"] == "tomamubuggy":
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
         else:
@@ -156,5 +156,6 @@ if not edited_df.empty:
         def highlight_rows(row):
             return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
         st.dataframe(active_df[display_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+
 
 
