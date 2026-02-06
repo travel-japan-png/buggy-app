@@ -33,10 +33,12 @@ def load_and_calculate():
     df['チェックイン'] = df['チェックイン'].fillna(False).astype(bool)
     df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0).astype(int)
     df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0).astype(int)
+    df['総販売金額'] = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0).astype(int)
     
-    # 車両・人数計算 (このロジックは保存後の再読み込み時に反映されます)
+    # 車両・人数計算ロジック
     total_ppl = df['大人人数'] + df['小人人数']
-    revenue = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
+    revenue = df['総販売金額']
+    # 計算式: (総額 - 保険料500円×人数) / 車両単価4000円
     drivers = ((revenue - (500 * total_ppl)) / 4000).apply(lambda x: int(round(x)) if x > 0 else 0)
     passengers = (total_ppl - drivers).apply(lambda x: int(x) if x > 0 else 0)
     
@@ -73,10 +75,10 @@ st.sidebar.metric("1人乗り在庫", f"{stock_1s} 台")
 
 # --- 3. 予約編集・チェックイン ---
 st.subheader("📋 予約編集・チェックイン")
-st.caption("※「開始時間」「顧客名」「人数」を編集して保存できます。「使用車両」は人数・金額に基づき自動計算されます。")
+st.caption("※「総販売金額」を変更して保存すると、車両台数が再計算されます。")
 
-# 編集用列の定義（大人・小人の列を復活）
-display_edit_cols = ['チェックイン', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
+# 編集用列の定義（総販売金額を復活）
+display_edit_cols = ['チェックイン', '開始時間', '顧客', '大人人数', '小人人数', '総販売金額', '使用車両']
 
 edited_view = st.data_editor(
     full_df[display_edit_cols], 
@@ -88,6 +90,7 @@ edited_view = st.data_editor(
         "顧客": st.column_config.TextColumn("名前"),
         "大人人数": st.column_config.NumberColumn("大人", min_value=0, step=1),
         "小人人数": st.column_config.NumberColumn("小人", min_value=0, step=1),
+        "総販売金額": st.column_config.NumberColumn("総額 (円)", min_value=0, format="%d"),
         "使用車両": st.column_config.TextColumn("計算上の車両", disabled=True),
     },
     key="editor",
@@ -101,12 +104,13 @@ if st.button("💾 変更を保存して全員に共有", type="primary", use_co
     full_df['顧客'] = edited_view['顧客']
     full_df['大人人数'] = edited_view['大人人数']
     full_df['小人人数'] = edited_view['小人人数']
+    full_df['総販売金額'] = edited_view['総販売金額']
     
     # 保存用列のみ抽出して更新
     save_cols = [c for c in full_df.columns if c not in ['状況', '使用車両', '人数', '_s2', '_s1']]
     conn.update(data=full_df[save_cols])
     st.cache_data.clear()
-    st.success("保存完了！車両割当を再計算しました。")
+    st.success("保存完了！最新の金額に基づき再計算しました。")
     st.rerun()
 
 # --- 4. 時間帯別の稼働合計 ---
