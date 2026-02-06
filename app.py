@@ -34,7 +34,7 @@ def load_and_calculate():
     df['大人人数'] = pd.to_numeric(df['大人人数'], errors='coerce').fillna(0).astype(int)
     df['小人人数'] = pd.to_numeric(df['小人人数'], errors='coerce').fillna(0).astype(int)
     
-    # 車両・人数計算
+    # 車両・人数計算 (このロジックは保存後の再読み込み時に反映されます)
     total_ppl = df['大人人数'] + df['小人人数']
     revenue = pd.to_numeric(df['総販売金額'], errors='coerce').fillna(0)
     drivers = ((revenue - (500 * total_ppl)) / 4000).apply(lambda x: int(round(x)) if x > 0 else 0)
@@ -73,75 +73,32 @@ st.sidebar.metric("1人乗り在庫", f"{stock_1s} 台")
 
 # --- 3. 予約編集・チェックイン ---
 st.subheader("📋 予約編集・チェックイン")
-st.caption("※「開始時間」「顧客名」は直接編集して保存できます。")
+st.caption("※「開始時間」「顧客名」「人数」を編集して保存できます。「使用車両」は人数・金額に基づき自動計算されます。")
 
-# 編集用列の定義（「人数」「使用車両」は計算結果なので閲覧のみ、他は編集可能）
-display_edit_cols = ['チェックイン', '開始時間', '顧客', '人数', '使用車両']
+# 編集用列の定義（大人・小人の列を復活）
+display_edit_cols = ['チェックイン', '開始時間', '顧客', '大人人数', '小人人数', '使用車両']
 
 edited_view = st.data_editor(
     full_df[display_edit_cols], 
-    num_rows="dynamic", # 新規追加も可能に
+    num_rows="dynamic",
     use_container_width=True,
     column_config={
         "チェックイン": st.column_config.CheckboxColumn("チェックイン", width="small"),
         "開始時間": st.column_config.TextColumn("開始時間"),
         "顧客": st.column_config.TextColumn("名前"),
-        "人数": st.column_config.TextColumn("人数 (閲覧のみ)", disabled=True),
-        "使用車両": st.column_config.TextColumn("使用車両 (閲覧のみ)", disabled=True),
+        "大人人数": st.column_config.NumberColumn("大人", min_value=0, step=1),
+        "小人人数": st.column_config.NumberColumn("小人", min_value=0, step=1),
+        "使用車両": st.column_config.TextColumn("計算上の車両", disabled=True),
     },
     key="editor",
     hide_index=True
 )
 
 if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
-    # 編集結果を反映
+    # 編集結果を全データに反映
     full_df['チェックイン'] = edited_view['チェックイン']
     full_df['開始時間'] = edited_view['開始時間']
     full_df['顧客'] = edited_view['顧客']
-    
-    # 保存用列のみ抽出して更新
-    save_cols = [c for c in full_df.columns if c not in ['状況', '使用車両', '人数', '_s2', '_s1']]
-    conn.update(data=full_df[save_cols])
-    st.cache_data.clear()
-    st.success("保存完了！")
-    st.rerun()
-
-# --- 4. 時間帯別の稼働合計 ---
-active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
-st.divider()
-st.subheader("📊 時間帯別の稼働合計")
-
-target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
-summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
-
-cols = st.columns(len(target_times))
-for i, time in enumerate(target_times):
-    s2_req, s1_req = 0, 0
-    for idx in summary.index:
-        if str(idx) == time:
-            s2_req = int(summary.loc[idx, '_s2'])
-            s1_req = int(summary.loc[idx, '_s1'])
-            break
-    
-    s1_overflow = max(0, s1_req - stock_1s)
-    final_s1, final_s2 = s1_req - s1_overflow, s2_req + s1_overflow
-    
-    with cols[i]:
-        st.write(f"🕒 **{time}**")
-        s2_color = "normal" if final_s2 <= stock_2s else "inverse"
-        st.metric("2人", f"{final_s2}/{stock_2s}", delta=int(stock_2s - final_s2), delta_color=s2_color)
-        st.metric("1人", f"{final_s1}/{stock_1s}")
-
-# --- 5. 現場用リスト ---
-st.subheader("🔍 現場用・当日車両割当リスト")
-final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
-if not active_df.empty:
-    def highlight_rows(row):
-        return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
-    
-    st.dataframe(
-        active_df[final_view_cols].style.apply(highlight_rows, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
+    full_df['大人人数'] = edited_view['大人人数']
+    full_df['小人人数'] = edited_view['小人人数']
 
