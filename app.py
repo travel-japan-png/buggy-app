@@ -101,4 +101,49 @@ if st.button("💾 変更を保存して全員に共有", type="primary", use_co
     full_df['顧客'] = edited_view['顧客']
     full_df['大人人数'] = edited_view['大人人数']
     full_df['小人人数'] = edited_view['小人人数']
+    
+    # 保存用列のみ抽出して更新
+    save_cols = [c for c in full_df.columns if c not in ['状況', '使用車両', '人数', '_s2', '_s1']]
+    conn.update(data=full_df[save_cols])
+    st.cache_data.clear()
+    st.success("保存完了！車両割当を再計算しました。")
+    st.rerun()
 
+# --- 4. 時間帯別の稼働合計 ---
+active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
+st.divider()
+st.subheader("📊 時間帯別の稼働合計")
+
+target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
+summary = active_df.groupby("開始時間").agg({"_s2": "sum", "_s1": "sum"})
+
+cols = st.columns(len(target_times))
+for i, time in enumerate(target_times):
+    s2_req, s1_req = 0, 0
+    for idx in summary.index:
+        if str(idx) == time:
+            s2_req = int(summary.loc[idx, '_s2'])
+            s1_req = int(summary.loc[idx, '_s1'])
+            break
+    
+    s1_overflow = max(0, s1_req - stock_1s)
+    final_s1, final_s2 = s1_req - s1_overflow, s2_req + s1_overflow
+    
+    with cols[i]:
+        st.write(f"🕒 **{time}**")
+        s2_color = "normal" if final_s2 <= stock_2s else "inverse"
+        st.metric("2人", f"{final_s2}/{stock_2s}", delta=int(stock_2s - final_s2), delta_color=s2_color)
+        st.metric("1人", f"{final_s1}/{stock_1s}")
+
+# --- 5. 現場用リスト ---
+st.subheader("🔍 現場用・当日車両割当リスト")
+final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
+if not active_df.empty:
+    def highlight_rows(row):
+        return ['background-color: #e6f3ff' if row['状況'] == "✅受付済" else '' for _ in row]
+    
+    st.dataframe(
+        active_df[final_view_cols].style.apply(highlight_rows, axis=1),
+        use_container_width=True,
+        hide_index=True
+    )
