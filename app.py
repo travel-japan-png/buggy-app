@@ -87,4 +87,83 @@ if st.button("🔄 最新の情報に更新"):
     st.cache_data.clear()
     st.rerun()
 
-# --- 3. 予約編集
+# --- 3. 予約編集 (3段階ステータス) ---
+st.subheader("📋 予約編集・受付管理")
+
+display_edit_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '総販売金額', '使用車両']
+status_options = ["未受付", "✅受付済", "🏁集合済"]
+
+edited_df = st.data_editor(
+    full_df[display_edit_cols], 
+    num_rows="dynamic",
+    use_container_width=True,
+    column_config={
+        "状況": st.column_config.SelectboxColumn("状況", options=status_options, width="medium"),
+        "大人人数": st.column_config.NumberColumn("大人", min_value=0, step=1),
+        "小人人数": st.column_config.NumberColumn("小人", min_value=0, step=1),
+        "総販売金額": st.column_config.NumberColumn("総額", min_value=0, format="%d"),
+        "使用車両": st.column_config.TextColumn("車両(自動)", disabled=True),
+    },
+    key="editor",
+    hide_index=True
+)
+
+if st.button("💾 変更を保存して共有", type="primary", use_container_width=True):
+    save_data = edited_df.copy()
+    if '使用車両' in save_data.columns:
+        save_data = save_data.drop(columns=['使用車両'])
+    if 'ステータス' not in save_data.columns:
+        save_data['ステータス'] = "予約確定"
+    try:
+        conn.update(data=save_data)
+        st.cache_data.clear()
+        st.success("保存完了！")
+        st.rerun()
+    except Exception as e:
+        st.error(f"保存失敗: {e}")
+
+# --- 4. 時間帯別の在庫状況 ---
+active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
+st.divider()
+st.subheader("📊 時間帯別の在庫状況")
+
+target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
+summary = active_df.groupby("開始時間").agg({"_s2_req": "sum", "_s1_req": "sum"})
+
+cols = st.columns(len(target_times))
+for i, time in enumerate(target_times):
+    stock_2s, stock_1s = time_stocks.get(time, [3, 3])
+    req_2s, req_1s = 0, 0
+    for idx in summary.index:
+        if str(idx).strip() == time:
+            req_2s = int(summary.loc[idx, '_s2_req'])
+            req_1s = int(summary.loc[idx, '_s1_req'])
+            break
+    
+    overflow_1s = max(0, req_1s - stock_1s)
+    final_1s = req_1s - overflow_1s
+    final_2s = req_2s + overflow_1s
+    
+    with cols[i]:
+        st.write(f"🕒 **{time}**")
+        s2_color = "normal" if final_2s <= stock_2s else "inverse"
+        st.metric("2人乗り", f"{final_2s}/{stock_2s}", delta=int(stock_2s - final_2s), delta_color=s2_color)
+        st.metric("1人乗り", f"{final_1s}/{stock_1s}")
+
+# --- 5. 現場用リスト (色分け表示) ---
+st.subheader("🔍 現場用・当日車両割当リスト")
+final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
+
+if not active_df.empty:
+    def highlight_status(row):
+        if row['状況'] == "🏁集合済":
+            return ['background-color: #d1ffd1'] * len(row) # 薄い緑
+        elif row['状況'] == "✅受付済":
+            return ['background-color: #e6f3ff'] * len(row) # 薄い青
+        return [''] * len(row)
+
+    st.dataframe(
+        active_df[final_view_cols].style.apply(highlight_status, axis=1),
+        use_container_width=True,
+        hide_index=True
+    )
