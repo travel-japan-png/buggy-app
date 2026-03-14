@@ -10,21 +10,23 @@ st_autorefresh(interval=180000, key="datarefresh")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_and_calculate():
+    # 1. メインシートの読み込み
     try:
         raw_df = conn.read(ttl=0)
-    except Exception:
-        st.error("スプレッドシートの読み込みに失敗しました。")
+    except Exception as e:
+        st.error(f"【エラー】メインシートの読み込みに失敗しました: {e}")
+        st.info("スプレッドシートのURLがSecretsに正しく設定されているか、共有設定が適切か確認してください。")
         st.stop()
 
-    # 在庫データの読み込み
+    # 2. 在庫設定シートの読み込み（失敗してもデフォルト値で続行）
     s2_stock, s1_stock = 3, 3 
     try:
         stock_df = conn.read(worksheet="在庫設定", ttl=0)
         if not stock_df.empty:
             s2_stock = int(stock_df.iloc[0]['2人乗り'])
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
-    except:
-        pass
+    except Exception:
+        st.warning("「在庫設定」シートが見つからないため、デフォルト在庫（各3台）で表示します。")
 
     df = raw_df.copy()
     
