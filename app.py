@@ -3,21 +3,17 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. 基本設定 & スマホ向けCSS注入 ---
+# --- 1. 基本設定 & スマホ向けCSS ---
 st.set_page_config(page_title="バギー現場管理", layout="wide")
 
-# スマホでボタンをより大きく見せるためのカスタムCSS
 st.markdown("""
     <style>
-    /* 保存ボタンなどのメインボタンを太く大きく */
     .stButton > button {
-        height: 3em;
+        height: 3.5em;
         font-size: 1.2rem !important;
         font-weight: bold !important;
-        border-radius: 10px;
-        margin-bottom: 10px;
+        border-radius: 12px;
     }
-    /* データエディタのセレクトボックスをタップしやすく */
     .stDataEditor div[data-testid="stTable"] {
         font-size: 1.1rem;
     }
@@ -27,7 +23,7 @@ st.markdown("""
 st_autorefresh(interval=180000, key="datarefresh")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 2. キャッシュ機能 (API制限対策) ---
+# --- 2. キャッシュ機能 ---
 @st.cache_data(ttl=60)
 def get_raw_data():
     return conn.read(ttl=0)
@@ -101,17 +97,14 @@ def load_and_calculate():
 
 full_df, time_stocks = load_and_calculate()
 
-# --- 3. スマホ特化ヘッダー ---
+# --- 3. メインUI ---
 st.title("🚜 現場管理")
 
-# 更新ボタンを横幅いっぱいに
 if st.button("🔄 最新に更新", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-# --- 4. 予約編集 (タップ領域を確保) ---
 st.subheader("📋 受付・編集")
-
 display_edit_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '総販売金額', '使用車両']
 status_options = ["未受付", "✅受付済", "🏁集合済"]
 
@@ -121,16 +114,15 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "状況": st.column_config.SelectboxColumn("状況", options=status_options, width="medium"),
-        "大人人数": st.column_config.NumberColumn("大", min_value=0, step=1, width="small"),
-        "小人人数": st.column_config.NumberColumn("小", min_value=0, step=1, width="small"),
+        "大人人数": st.column_config.NumberColumn("大", min_value=0, step=1),
+        "小人人数": st.column_config.NumberColumn("小", min_value=0, step=1),
         "使用車両": st.column_config.TextColumn("車両", disabled=True),
     },
     key="editor",
     hide_index=True
 )
 
-# 最重要の保存ボタンをさらに強調
-if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
+if st.button("💾 変更を保存して共有", type="primary", use_container_width=True):
     save_data = edited_df.copy()
     if '使用車両' in save_data.columns:
         save_data = save_data.drop(columns=['使用車両'])
@@ -141,18 +133,16 @@ if st.button("💾 変更を保存して全員に共有", type="primary", use_co
         st.cache_data.clear()
         st.success("保存完了！")
         st.rerun()
-    except Exception as e:
+    except Exception:
         st.error("保存失敗。少し待ってから再試行してください")
 
-# --- 5. 時間帯別サマリー (スマホで見やすい2列表示) ---
+# --- 4. 在庫状況 (2列レイアウト) ---
 st.divider()
-st.subheader("📊 在庫")
-
+st.subheader("📊 在庫状況")
 target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
 active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
 summary = active_df.groupby("開始時間").agg({"_s2_req": "sum", "_s1_req": "sum"})
 
-# スマホだと1列になりがちなので、あえて2列ずつ配置
 for i in range(0, len(target_times), 2):
     row_cols = st.columns(2)
     for j in range(2):
@@ -165,4 +155,20 @@ for i in range(0, len(target_times), 2):
                     req_2s = int(summary.loc[idx, '_s2_req'])
                     req_1s = int(summary.loc[idx, '_s1_req'])
                     break
-            overflow = max(0, req_1s
+            # 1人乗り不足分を2人乗りに振り替える計算
+            overflow = max(0, int(req_1s - stock_1s))
+            f2s, f1s = int(req_2s + overflow), int(req_1s - overflow)
+            with row_cols[j]:
+                s2_color = "normal" if f2s <= stock_2s else "inverse"
+                st.metric(f"🕒{time}", f"2人:{f2s}/{stock_2s}", delta=int(stock_2s - f2s), delta_color=s2_color)
+                st.write(f"1人:{f1s}/{stock_1s}")
+
+# --- 5. 現場用リスト ---
+st.subheader("🔍 割当リスト")
+final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
+if not active_df.empty:
+    def highlight_status(row):
+        if row['状況'] == "🏁集合済": return ['background-color: #d1ffd1'] * len(row)
+        elif row['状況'] == "✅受付済": return ['background-color: #e6f3ff'] * len(row)
+        return [''] * len(row)
+    st.dataframe(active_df[final_view_cols].style.apply(highlight_status, axis=1), use_container_width=True, hide_index=True)
