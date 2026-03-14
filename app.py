@@ -10,27 +10,24 @@ st_autorefresh(interval=180000, key="datarefresh")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_and_calculate():
-    # 1. メインシートの読み込み
     try:
         raw_df = conn.read(ttl=0)
     except Exception as e:
-        st.error(f"【エラー】メインシートの読み込みに失敗しました: {e}")
-        st.info("スプレッドシートのURLがSecretsに正しく設定されているか、共有設定が適切か確認してください。")
+        st.error(f"スプレッドシートの読み込みに失敗しました: {e}")
         st.stop()
 
-    # 2. 在庫設定シートの読み込み（失敗してもデフォルト値で続行）
     s2_stock, s1_stock = 3, 3 
     try:
         stock_df = conn.read(worksheet="在庫設定", ttl=0)
         if not stock_df.empty:
             s2_stock = int(stock_df.iloc[0]['2人乗り'])
             s1_stock = int(stock_df.iloc[0]['1人乗り'])
-    except Exception:
-        st.warning("「在庫設定」シートが見つからないため、デフォルト在庫（各3台）で表示します。")
+    except:
+        pass
 
     df = raw_df.copy()
     
-    # 必須列の補完と型変換
+    # 必須列の型変換と補完
     num_cols = ['大人人数', '小人人数', '総販売金額']
     for col in num_cols:
         if col not in df.columns: df[col] = 0
@@ -42,18 +39,25 @@ def load_and_calculate():
     if '顧客' not in df.columns: df['顧客'] = ""
     if 'ステータス' not in df.columns: df['ステータス'] = "予約確定"
 
-    # 車両計算ロジック
+    # 車両計算ロジック（エラー回避を強化）
     def calc_logic(row):
-        t = row['大人人数'] + row['小人人数']
-        r = row['総販売金額']
-        if t == 0: return 0, 0
-        d = max(0, int(round((r - (500 * t)) / 4000)))
-        p = max(0, t - d)
-        return d, p
+        try:
+            t = int(row['大人人数']) + int(row['小人人数'])
+            r = int(row['総販売金額'])
+            if t <= 0: return 0, 0
+            # 運転手台数 = (総額 - 保険500*人数) / 4000
+            d = max(0, int(round((r - (500 * t)) / 4000)))
+            p = max(0, t - d)
+            return d, p
+        except:
+            return 0, 0
 
-    calc_res = df.apply(calc_logic, axis=1)
-    df['_s2'] = [x[1] for x in calc_res]
-    df['_s1'] = [max(0, x[0] - x[1]) for x in calc_res]
+    # 計算実行
+    calc_results = df.apply(calc_logic, axis=1)
+    
+    # リスト内包表記でのエラーを避けるため、安全に列を作成
+    df['_s2'] = [x[1] for x in calc_results]
+    df['_s1'] = [max(0, x[0] - x[1]) for x in calc_results]
     
     df['使用車両'] = df.apply(lambda row: 
         (f"【2人】{int(row['_s2'])}台 " if row['_s2'] > 0 else "") + \
@@ -70,6 +74,7 @@ def load_and_calculate():
         
     return df, s2_stock, s1_stock
 
+# 読み込み実行
 full_df, stock_2s, stock_1s = load_and_calculate()
 
 # --- 2. メイン表示 ---
@@ -107,8 +112,10 @@ edited_df = st.data_editor(
 
 if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
     save_data = edited_df.copy()
+    # 不要な列を削除して保存
     if '使用車両' in save_data.columns:
         save_data = save_data.drop(columns=['使用車両'])
+    # ステータス補完
     if 'ステータス' not in save_data.columns:
         save_data['ステータス'] = "予約確定"
         
