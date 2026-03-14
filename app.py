@@ -3,19 +3,36 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. 基本設定 & 自動更新 (3分) ---
-st.set_page_config(page_title="バギーツアー管理", layout="wide")
-st_autorefresh(interval=180000, key="datarefresh")
+# --- 1. 基本設定 & スマホ向けCSS注入 ---
+st.set_page_config(page_title="バギー現場管理", layout="wide")
 
+# スマホでボタンをより大きく見せるためのカスタムCSS
+st.markdown("""
+    <style>
+    /* 保存ボタンなどのメインボタンを太く大きく */
+    .stButton > button {
+        height: 3em;
+        font-size: 1.2rem !important;
+        font-weight: bold !important;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
+    /* データエディタのセレクトボックスをタップしやすく */
+    .stDataEditor div[data-testid="stTable"] {
+        font-size: 1.1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+st_autorefresh(interval=180000, key="datarefresh")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 2. データの読み込み関数 (キャッシュ導入版) ---
-# ttl=60 により、1分間は同じデータを使い回し、APIを叩きに行きません
+# --- 2. キャッシュ機能 (API制限対策) ---
 @st.cache_data(ttl=60)
 def get_raw_data():
     return conn.read(ttl=0)
 
-@st.cache_data(ttl=300) # 在庫設定は5分間キャッシュ
+@st.cache_data(ttl=300)
 def get_stock_config():
     default_stock = {
         "9:00": [3, 3], "9:30": [3, 3], "10:00": [3, 3], "10:30": [3, 3],
@@ -36,23 +53,18 @@ def load_and_calculate():
     try:
         raw_df = get_raw_data()
     except Exception as e:
-        # 429エラー(Quota Exceeded)が出た場合のメッセージを優しくする
         if "429" in str(e):
-            st.error("⚠️ Googleスプレッドシートのアクセス制限がかかっています。1分ほど待ってから再試行してください。")
+            st.error("⚠️ 制限中：1分待って再起動してください")
             st.stop()
-        else:
-            st.error(f"メインシートの読み込みに失敗: {e}")
-            st.stop()
+        st.error(f"読み込み失敗: {e}")
+        st.stop()
 
     time_stocks = get_stock_config()
     df = raw_df.copy()
     
-    # 状況列の処理
-    if '状況' not in df.columns:
-        df['状況'] = "未受付"
+    if '状況' not in df.columns: df['状況'] = "未受付"
     df['状況'] = df['状況'].fillna("未受付")
 
-    # 必須列の型変換
     num_cols = ['大人人数', '小人人数', '総販売金額']
     for col in num_cols:
         if col not in df.columns: df[col] = 0
@@ -61,7 +73,6 @@ def load_and_calculate():
     if '開始時間' not in df.columns: df['開始時間'] = ""
     if 'ステータス' not in df.columns: df['ステータス'] = "予約確定"
 
-    # 車両計算ロジック
     def calc_logic(row):
         try:
             t = int(row['大人人数']) + int(row['小人人数'])
@@ -77,10 +88,10 @@ def load_and_calculate():
     df['_s1_req'] = [max(0, x[0] - x[1]) for x in calc_results]
     
     df['使用車両'] = df.apply(lambda row: 
-        (f"【2人】{int(row['_s2_req'])}台 " if row['_s2_req'] > 0 else "") + \
-        (f"【1人】{int(row['_s1_req'])}台" if row['_s1_req'] > 0 else ""), axis=1)
+        (f"2人:{int(row['_s2_req'])} " if row['_s2_req'] > 0 else "") + \
+        (f"1人:{int(row['_s1_req'])}" if row['_s1_req'] > 0 else ""), axis=1)
     
-    df['人数'] = df['大人人数'].astype(str) + "大 " + df['小人人数'].astype(str) + "小"
+    df['人数'] = df['大人人数'].astype(str) + "大" + df['小人人数'].astype(str) + "小"
     
     if '開始時間' in df.columns:
         df['temp_time'] = pd.to_datetime(df['開始時間'], errors='coerce')
@@ -90,15 +101,16 @@ def load_and_calculate():
 
 full_df, time_stocks = load_and_calculate()
 
-# --- 3. メイン表示 ---
-st.title("🚜 バギーツアー受付・車両管理")
+# --- 3. スマホ特化ヘッダー ---
+st.title("🚜 現場管理")
 
-if st.button("🔄 最新の情報に更新 (制限回避のため1分に1回まで)"):
+# 更新ボタンを横幅いっぱいに
+if st.button("🔄 最新に更新", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-# --- 4. 予約編集 (3段階ステータス) ---
-st.subheader("📋 予約編集・受付管理")
+# --- 4. 予約編集 (タップ領域を確保) ---
+st.subheader("📋 受付・編集")
 
 display_edit_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '総販売金額', '使用車両']
 status_options = ["未受付", "✅受付済", "🏁集合済"]
@@ -109,16 +121,16 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "状況": st.column_config.SelectboxColumn("状況", options=status_options, width="medium"),
-        "大人人数": st.column_config.NumberColumn("大人", min_value=0, step=1),
-        "小人人数": st.column_config.NumberColumn("小人", min_value=0, step=1),
-        "総販売金額": st.column_config.NumberColumn("総額", min_value=0, format="%d"),
-        "使用車両": st.column_config.TextColumn("車両(自動)", disabled=True),
+        "大人人数": st.column_config.NumberColumn("大", min_value=0, step=1, width="small"),
+        "小人人数": st.column_config.NumberColumn("小", min_value=0, step=1, width="small"),
+        "使用車両": st.column_config.TextColumn("車両", disabled=True),
     },
     key="editor",
     hide_index=True
 )
 
-if st.button("💾 変更を保存して共有", type="primary", use_container_width=True):
+# 最重要の保存ボタンをさらに強調
+if st.button("💾 変更を保存して全員に共有", type="primary", use_container_width=True):
     save_data = edited_df.copy()
     if '使用車両' in save_data.columns:
         save_data = save_data.drop(columns=['使用車両'])
@@ -126,45 +138,31 @@ if st.button("💾 変更を保存して共有", type="primary", use_container_w
         save_data['ステータス'] = "予約確定"
     try:
         conn.update(data=save_data)
-        st.cache_data.clear() # 保存後は最新を取るためにキャッシュを消す
+        st.cache_data.clear()
         st.success("保存完了！")
         st.rerun()
     except Exception as e:
-        if "429" in str(e):
-            st.error("⚠️ 保存リクエストが多すぎます。30秒ほど待ってからもう一度「保存」を押してください。")
-        else:
-            st.error(f"保存失敗: {e}")
+        st.error("保存失敗。少し待ってから再試行してください")
 
-# --- 5. 在庫状況 & リスト表示 (前回のコードと同様) ---
-active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
+# --- 5. 時間帯別サマリー (スマホで見やすい2列表示) ---
 st.divider()
-st.subheader("📊 時間帯別の在庫状況")
+st.subheader("📊 在庫")
 
 target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
+active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
 summary = active_df.groupby("開始時間").agg({"_s2_req": "sum", "_s1_req": "sum"})
 
-cols = st.columns(len(target_times))
-for i, time in enumerate(target_times):
-    stock_2s, stock_1s = time_stocks.get(time, [3, 3])
-    req_2s, req_1s = 0, 0
-    for idx in summary.index:
-        if str(idx).strip() == time:
-            req_2s = int(summary.loc[idx, '_s2_req'])
-            req_1s = int(summary.loc[idx, '_s1_req'])
-            break
-    overflow_1s = max(0, req_1s - stock_1s)
-    final_1s, final_2s = req_1s - overflow_1s, req_2s + overflow_1s
-    with cols[i]:
-        st.write(f"🕒 **{time}**")
-        s2_color = "normal" if final_2s <= stock_2s else "inverse"
-        st.metric("2人乗り", f"{final_2s}/{stock_2s}", delta=int(stock_2s - final_2s), delta_color=s2_color)
-        st.metric("1人乗り", f"{final_1s}/{stock_1s}")
-
-st.subheader("🔍 現場用・当日車両割当リスト")
-final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
-if not active_df.empty:
-    def highlight_status(row):
-        if row['状況'] == "🏁集合済": return ['background-color: #d1ffd1'] * len(row)
-        elif row['状況'] == "✅受付済": return ['background-color: #e6f3ff'] * len(row)
-        return [''] * len(row)
-    st.dataframe(active_df[final_view_cols].style.apply(highlight_status, axis=1), use_container_width=True, hide_index=True)
+# スマホだと1列になりがちなので、あえて2列ずつ配置
+for i in range(0, len(target_times), 2):
+    row_cols = st.columns(2)
+    for j in range(2):
+        if i + j < len(target_times):
+            time = target_times[i+j]
+            stock_2s, stock_1s = time_stocks.get(time, [3, 3])
+            req_2s, req_1s = 0, 0
+            for idx in summary.index:
+                if str(idx).strip() == time:
+                    req_2s = int(summary.loc[idx, '_s2_req'])
+                    req_1s = int(summary.loc[idx, '_s1_req'])
+                    break
+            overflow = max(0, req_1s
