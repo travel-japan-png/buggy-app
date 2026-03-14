@@ -3,20 +3,20 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. 基本設定 & 自動更新 ---
+# --- 1. 基本設定 & 自動更新 (3分) ---
 st.set_page_config(page_title="バギーツアー管理", layout="wide")
 st_autorefresh(interval=180000, key="datarefresh")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def load_and_calculate():
-    try:
-        raw_df = conn.read(ttl=0)
-    except Exception as e:
-        st.error(f"メインシートの読み込みに失敗: {e}")
-        st.stop()
+# --- 2. データの読み込み関数 (キャッシュ導入版) ---
+# ttl=60 により、1分間は同じデータを使い回し、APIを叩きに行きません
+@st.cache_data(ttl=60)
+def get_raw_data():
+    return conn.read(ttl=0)
 
-    # 在庫設定の読み込み
+@st.cache_data(ttl=300) # 在庫設定は5分間キャッシュ
+def get_stock_config():
     default_stock = {
         "9:00": [3, 3], "9:30": [3, 3], "10:00": [3, 3], "10:30": [3, 3],
         "14:00": [3, 3], "14:30": [3, 3], "15:00": [3, 3]
@@ -30,16 +30,26 @@ def load_and_calculate():
                 time_stocks[t_str] = [int(row['2人乗り']), int(row['1人乗り'])]
     except:
         pass
+    return time_stocks
 
+def load_and_calculate():
+    try:
+        raw_df = get_raw_data()
+    except Exception as e:
+        # 429エラー(Quota Exceeded)が出た場合のメッセージを優しくする
+        if "429" in str(e):
+            st.error("⚠️ Googleスプレッドシートのアクセス制限がかかっています。1分ほど待ってから再試行してください。")
+            st.stop()
+        else:
+            st.error(f"メインシートの読み込みに失敗: {e}")
+            st.stop()
+
+    time_stocks = get_stock_config()
     df = raw_df.copy()
     
-    # 状況列の処理（チェックイン列がある場合は移行）
+    # 状況列の処理
     if '状況' not in df.columns:
-        if 'チェックイン' in df.columns:
-            df['状況'] = df['チェックイン'].apply(lambda x: "✅受付済" if x == True else "未受付")
-        else:
-            df['状況'] = "未受付"
-    
+        df['状況'] = "未受付"
     df['状況'] = df['状況'].fillna("未受付")
 
     # 必須列の型変換
@@ -80,14 +90,14 @@ def load_and_calculate():
 
 full_df, time_stocks = load_and_calculate()
 
-# --- 2. メイン表示 ---
+# --- 3. メイン表示 ---
 st.title("🚜 バギーツアー受付・車両管理")
 
-if st.button("🔄 最新の情報に更新"):
+if st.button("🔄 最新の情報に更新 (制限回避のため1分に1回まで)"):
     st.cache_data.clear()
     st.rerun()
 
-# --- 3. 予約編集 (3段階ステータス) ---
+# --- 4. 予約編集 (3段階ステータス) ---
 st.subheader("📋 予約編集・受付管理")
 
 display_edit_cols = ['状況', '開始時間', '顧客', '大人人数', '小人人数', '総販売金額', '使用車両']
@@ -116,13 +126,16 @@ if st.button("💾 変更を保存して共有", type="primary", use_container_w
         save_data['ステータス'] = "予約確定"
     try:
         conn.update(data=save_data)
-        st.cache_data.clear()
+        st.cache_data.clear() # 保存後は最新を取るためにキャッシュを消す
         st.success("保存完了！")
         st.rerun()
     except Exception as e:
-        st.error(f"保存失敗: {e}")
+        if "429" in str(e):
+            st.error("⚠️ 保存リクエストが多すぎます。30秒ほど待ってからもう一度「保存」を押してください。")
+        else:
+            st.error(f"保存失敗: {e}")
 
-# --- 4. 時間帯別の在庫状況 ---
+# --- 5. 在庫状況 & リスト表示 (前回のコードと同様) ---
 active_df = full_df[full_df['ステータス'] != 'キャンセル'].copy()
 st.divider()
 st.subheader("📊 時間帯別の在庫状況")
@@ -139,31 +152,19 @@ for i, time in enumerate(target_times):
             req_2s = int(summary.loc[idx, '_s2_req'])
             req_1s = int(summary.loc[idx, '_s1_req'])
             break
-    
     overflow_1s = max(0, req_1s - stock_1s)
-    final_1s = req_1s - overflow_1s
-    final_2s = req_2s + overflow_1s
-    
+    final_1s, final_2s = req_1s - overflow_1s, req_2s + overflow_1s
     with cols[i]:
         st.write(f"🕒 **{time}**")
         s2_color = "normal" if final_2s <= stock_2s else "inverse"
         st.metric("2人乗り", f"{final_2s}/{stock_2s}", delta=int(stock_2s - final_2s), delta_color=s2_color)
         st.metric("1人乗り", f"{final_1s}/{stock_1s}")
 
-# --- 5. 現場用リスト (色分け表示) ---
 st.subheader("🔍 現場用・当日車両割当リスト")
 final_view_cols = ['状況', '開始時間', '顧客', '人数', '使用車両']
-
 if not active_df.empty:
     def highlight_status(row):
-        if row['状況'] == "🏁集合済":
-            return ['background-color: #d1ffd1'] * len(row) # 薄い緑
-        elif row['状況'] == "✅受付済":
-            return ['background-color: #e6f3ff'] * len(row) # 薄い青
+        if row['状況'] == "🏁集合済": return ['background-color: #d1ffd1'] * len(row)
+        elif row['状況'] == "✅受付済": return ['background-color: #e6f3ff'] * len(row)
         return [''] * len(row)
-
-    st.dataframe(
-        active_df[final_view_cols].style.apply(highlight_status, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(active_df[final_view_cols].style.apply(highlight_status, axis=1), use_container_width=True, hide_index=True)
