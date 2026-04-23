@@ -14,8 +14,9 @@ st.markdown("""
         font-weight: bold !important;
         border-radius: 12px;
     }
-    .stDataEditor div[data-testid="stTable"] {
-        font-size: 1.1rem;
+    /* メトリックのラベルサイズ調整 */
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -136,7 +137,7 @@ if st.button("💾 変更を保存して共有", type="primary", use_container_w
     except Exception:
         st.error("保存失敗。少し待ってから再試行してください")
 
-# --- 4. 在庫状況 (2列レイアウト) ---
+# --- 4. 在庫状況 (2人/1人を並列・同サイズで表示) ---
 st.divider()
 st.subheader("📊 在庫状況")
 target_times = ["9:00", "9:30", "10:00", "10:30", "14:00", "14:30", "15:00"]
@@ -155,13 +156,21 @@ for i in range(0, len(target_times), 2):
                     req_2s = int(summary.loc[idx, '_s2_req'])
                     req_1s = int(summary.loc[idx, '_s1_req'])
                     break
-            # 1人乗り不足分を2人乗りに振り替える計算
+            
             overflow = max(0, int(req_1s - stock_1s))
             f2s, f1s = int(req_2s + overflow), int(req_1s - overflow)
+            
             with row_cols[j]:
-                s2_color = "normal" if f2s <= stock_2s else "inverse"
-                st.metric(f"🕒{time}", f"2人:{f2s}/{stock_2s}", delta=int(stock_2s - f2s), delta_color=s2_color)
-                st.write(f"1人:{f1s}/{stock_1s}")
+                st.write(f"🕒 **{time}**")
+                # 2列に分けて2人と1人を表示
+                m_col1, m_col2 = st.columns(2)
+                with m_col1:
+                    s2_color = "normal" if f2s <= stock_2s else "inverse"
+                    st.metric("2人", f"{f2s}/{stock_2s}", delta=int(stock_2s - f2s), delta_color=s2_color)
+                with m_col2:
+                    s1_color = "normal" if f1s <= stock_1s else "inverse"
+                    st.metric("1人", f"{f1s}/{stock_1s}", delta=int(stock_1s - f1s), delta_color=s1_color)
+                st.write("---")
 
 # --- 5. 現場用リスト ---
 st.subheader("🔍 割当リスト")
